@@ -17,6 +17,7 @@ from . import db
 from .config import Config
 from .embeddings import Embedder
 from .engine import ingest as run_ingest
+from .projects import resolve_project
 from .store import Store
 
 _CONFIG = Config()
@@ -43,11 +44,13 @@ def _scope(project: str | None, cwd_default: bool = True) -> str | None:
     """
     if project and project.strip() in ("*", "all", "global"):
         return None
-    if project:
-        return project
-    if cwd_default:
-        return os.environ.get("NIMROD_PROJECT") or os.getcwd()
-    return None
+    if not project:
+        if not cwd_default:
+            return None
+        project = os.environ.get("NIMROD_PROJECT") or os.getcwd()
+    # Canonicalize to the enclosing repository so a session started in a
+    # subdirectory, or in ``$HOME``, does not resolve to a parent scope.
+    return resolve_project(project)
 
 
 def create_server():

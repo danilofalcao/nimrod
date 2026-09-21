@@ -4,8 +4,8 @@
 # After formatting the computer, reinstall the agents (Claude Code, Codex,
 # OpenCode, Pi) and then run this once:
 #
-#     git clone <remote> ~/Projects/Danilo/nimrod
-#     cd ~/Projects/Danilo/nimrod
+#     git clone <remote> ~/src/nimrod
+#     cd ~/src/nimrod
 #     ./bootstrap.sh
 #
 # It creates the virtualenv, installs the package, wires the hooks + MCP into

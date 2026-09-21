@@ -121,7 +121,7 @@ nimrod install --dry-run
 
 ```sh
 nimrod context                     # the handoff brief for the current project
-nimrod context --project wfkit     # ... for another project, by folder name
+nimrod context --project other-repo  # ... for another project, by folder name
 nimrod search "race condition in the parser"
 nimrod recent --agent codex
 nimrod stats

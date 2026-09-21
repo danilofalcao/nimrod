@@ -14,6 +14,13 @@ from . import __version__, db
 from .config import Config
 from .embeddings import Embedder
 from .engine import ingest as run_ingest
+from .projects import (
+    find_project_root,
+    is_auto_recall_candidate,
+    normalize,
+    project_name,
+    resolve_project,
+)
 from .store import Store
 
 
@@ -232,10 +239,11 @@ def _prompt_submit(args, cfg: Config) -> int:
     """Economical, language-agnostic auto-recall.
 
     No keyword or stopword lists anywhere. The only signal used is whether the
-    prompt names a project that the worklog already knows about and that is not
-    the one the agent is currently in -- e.g. asking about ``wfkit-archinstall``
-    from the ``nimrod`` repo. Project names come from the database, so this
-    works in any language. Everything else stays on demand via ``work_search``.
+    prompt names a project the worklog already knows about -- every word of the
+    project name must be present -- which is a real repository (not ``$HOME``,
+    ``/tmp`` or a hidden config directory), and which does not enclose the
+    directory the agent is already running in. Everything else stays on demand
+    via ``work_search``.
     """
     if os.environ.get("NIMROD_AUTO_RECALL") == "0":
         return 0
@@ -244,48 +252,58 @@ def _prompt_submit(args, cfg: Config) -> int:
     except Exception:
         return 0
     prompt = (payload.get("prompt") or payload.get("message") or "").strip()
-    if len(prompt) < 12:
+    session_id = str(
+        payload.get("session_id")
+        or payload.get("sessionId")
+        or os.environ.get("CODEX_THREAD_ID")
+        or ""
+    )
+    # Without a session identity the recall cannot be de-duplicated, and
+    # repeating the same injection on every prompt is worse than staying quiet.
+    if len(prompt) < 12 or not session_id:
         return 0
     tokens = set(_tokens(prompt, limit=24))
     if not tokens:
         return 0
-    cwd = payload.get("cwd") or payload.get("project_dir") or args.project
-    cwd = (cwd or "").rstrip("/")
+    cwd = normalize(payload.get("cwd") or payload.get("project_dir") or args.project)
 
     conn, store = _open(cfg, semantic=False)
     try:
-        matches: list[tuple[int, dict]] = []
+        matches: list[tuple[int, str, dict]] = []
         for project in store.project_index():
-            name = (project["name"] or "").strip()
-            if len(name) < 3:
+            path = project["path"] or project["name"]
+            if not is_auto_recall_candidate(path, cwd):
                 continue
-            path = (project["path"] or "").rstrip("/")
-            if cwd and path == cwd:
+            name_tokens = _tokens(
+                (project["name"] or "").replace("-", " ").replace("_", " "), limit=6
+            )
+            # Every word of the project name must appear in the prompt. A single
+            # shared word is not enough: a path or filename that happens to
+            # contain one word of a project name must not recall that project.
+            if not name_tokens or not set(name_tokens) <= tokens:
                 continue
-            name_tokens = _tokens(name.replace("-", " ").replace("_", " "), limit=6)
-            hit = len(tokens & set(name_tokens))
-            if hit:
-                matches.append((hit, project))
+            root = find_project_root(path) or path
+            matches.append((len(name_tokens), root, project))
         if not matches:
             return 0
-        matches.sort(key=lambda kv: (-kv[0], -(kv[1]["last_seen"] or 0)))
-        best = matches[0][1]
-        hits = store.recent(best["path"] or best["name"], limit=3)
+        matches.sort(key=lambda kv: (-kv[0], -(kv[2]["last_seen"] or 0)))
+        root = matches[0][1]
+        hits = store.recent(root, limit=3)
     finally:
         conn.close()
     if not hits:
         return 0
 
-    session_id = str(payload.get("session_id") or "")
-    marker = cfg.cache_dir / f"recall-{session_id}.txt" if session_id else None
-    if marker is not None and marker.exists():
+    label = project_name(root) or root
+    marker = cfg.cache_dir / f"recall-{session_id}.txt"
+    if marker.exists():
         try:
-            if marker.read_text(encoding="utf-8").strip() == best["name"]:
+            if marker.read_text(encoding="utf-8").strip() == label:
                 return 0
         except OSError:
             pass
 
-    lines = [f"Nimrod has past work for project '{best['name']}' "
+    lines = [f"Nimrod has past work for project '{label}' "
              "(share only if relevant; use work_session(id) for details):"]
     for s in hits:
         when = time.strftime(
@@ -293,11 +311,10 @@ def _prompt_submit(args, cfg: Config) -> int:
         ) if (s.get("ended_at") or s.get("started_at")) else "?"
         lines.append(f"- [{when} {s['agent']}] {(s.get('title') or '')[:90]} "
                      f"(id: {s['id']})")
-    if marker is not None:
-        try:
-            marker.write_text(best["name"], encoding="utf-8")
-        except OSError:
-            pass
+    try:
+        marker.write_text(label, encoding="utf-8")
+    except OSError:
+        pass
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
@@ -317,10 +334,15 @@ def cmd_hook(args) -> int:
     if args.event == "prompt-submit":
         return _prompt_submit(args, cfg)
     quiet = args.event != "session-start"
+    # Canonicalize to the enclosing repository: a session started in a
+    # subdirectory belongs to the repo, and a session started outside any repo
+    # ($HOME, /tmp) must not claim every project underneath it.
+    cwd = args.project or os.getcwd()
+    scope = resolve_project(cwd) or cwd
     try:
         run_ingest(
             cfg,
-            project=args.project or None,
+            project=scope,
             semantic=bool(args.semantic),
             progress=None,
         )
@@ -332,7 +354,9 @@ def cmd_hook(args) -> int:
 
     conn, store = _open(cfg, semantic=False)
     try:
-        brief = store.context(args.project or os.getcwd(), limit=args.limit)
+        brief = ""
+        if find_project_root(scope):
+            brief = store.context(scope, limit=args.limit)
     finally:
         conn.close()
     text = TOOLS_HINT if not brief else TOOLS_HINT + "\n\n" + brief

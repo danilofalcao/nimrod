@@ -1,9 +1,10 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from nimrod import db
-from nimrod.embeddings import Embedder
+from nimrod.embeddings import Embedder, pack
 from nimrod.models import COMMAND, Event, FILE_EDIT, PROMPT, ParsedSession
 from nimrod.store import Store
 
@@ -73,3 +74,88 @@ def test_record_note(store):
     notes = store.recent("/home/me/alpha")
     assert notes[0]["id"] == sid
     assert notes[0]["agent"] == "note"
+
+
+def test_scope_is_exact_and_ignores_nested_projects(store):
+    store.write_session(_session("parent", "/home/me", "work in the home bucket",
+                                 "/home/me/notes.md"))
+    store.write_session(_session("child", "/home/me/repo", "fix the widget",
+                                 "/home/me/repo/widget.py"))
+    store.write_session(_session("grandchild", "/home/me/repo/pkg", "tune packaging",
+                                 "/home/me/repo/pkg/setup.py"))
+
+    parent_scope = [s["session_id"] for s in store.recent("/home/me")]
+    assert parent_scope == ["parent"]
+
+    repo_scope = [s["session_id"] for s in store.recent("/home/me/repo")]
+    assert repo_scope == ["child"]
+
+    ctx = store.context("/home/me")
+    assert "home bucket" in ctx
+    assert "fix the widget" not in ctx
+    assert "tune packaging" not in ctx
+
+
+def test_scope_matches_project_name_case_insensitively(store):
+    store.write_session(_session("s1", "/home/me/Alpha", "add login",
+                                 "/home/me/Alpha/auth.py"))
+    store.write_session(_session("s2", "/home/me/beta", "fix css",
+                                 "/home/me/beta/style.css"))
+
+    assert [s["session_id"] for s in store.recent("alpha")] == ["s1"]
+    assert [s["session_id"] for s in store.recent("Alpha")] == ["s1"]
+    # Names are no longer matched as substrings: "alp" must not match "Alpha".
+    assert store.recent("alp") == []
+
+
+def test_filtered_session_rows_applies_the_same_scope(store):
+    store.write_session(_session("parent", "/home/me", "bucket", "/home/me/a.md"))
+    store.write_session(_session("child", "/home/me/repo", "widget",
+                                 "/home/me/repo/widget.py"))
+
+    ids = ["claude:parent", "claude:child"]
+    rows = store._filtered_session_rows(ids, "/home/me", None, None)
+    assert set(rows) == {"claude:parent"}
+    rows = store._filtered_session_rows(ids, None, None, None)
+    assert set(rows) == set(ids)
+    rows = store._filtered_session_rows(ids, "/home/me/repo", None, None)
+    assert set(rows) == {"claude:child"}
+
+
+class _FakeEmbedder:
+    enabled = True
+    model_name = "fake"
+
+    def __init__(self, vector):
+        self.vector = np.asarray(vector, dtype=np.float32)
+
+    def embed(self, texts):
+        if not texts:
+            return None
+        return np.stack([self.vector for _ in texts])
+
+
+def test_semantic_search_respects_exact_scope(tmp_path):
+    conn = db.connect(tmp_path / "sem.db")
+    try:
+        store = Store(conn, _FakeEmbedder([1.0, 0.0]))
+        store.write_session(_session("parent", "/home/me", "bucket alpha",
+                                     "/home/me/a.md"))
+        store.write_session(_session("child", "/home/me/repo", "widget beta",
+                                     "/home/me/repo/w.py"))
+        for sid in ("claude:parent", "claude:child"):
+            conn.execute("DELETE FROM embeddings WHERE owner_id=?", (sid,))
+            conn.execute(
+                "INSERT INTO embeddings(owner_type, owner_id, model, dim, vector) "
+                "VALUES('session',?,?,?,?)",
+                (sid, "fake", 2, pack([1.0, 0.0])),
+            )
+
+        # No lexical match, so only the semantic ranking (and its scoping) runs.
+        scoped = store.search("zzzq", project="/home/me")
+        assert [r["session_id"] for r in scoped] == ["parent"]
+
+        everything = store.search("zzzq")
+        assert {r["session_id"] for r in everything} == {"parent", "child"}
+    finally:
+        conn.close()

@@ -4,20 +4,22 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
-from pathlib import Path
 from typing import Any
 
 from ..models import Event, ParsedSession
+from ..projects import project_name  # re-exported for source adapters
 
-
-def project_name(path: str | None) -> str | None:
-    if not path:
-        return None
-    p = Path(path)
-    name = p.name
-    if not name or name == Path.home().name:
-        return str(p)
-    return name
+__all__ = [
+    "clip",
+    "fallback_title",
+    "file_meta",
+    "first_line",
+    "is_probably_binary_path",
+    "project_name",
+    "relative_to_project",
+    "to_epoch_ms",
+    "build_summary",
+]
 
 
 def to_epoch_ms(value: Any) -> int | None:

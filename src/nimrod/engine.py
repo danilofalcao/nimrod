@@ -7,6 +7,7 @@ write transaction commits, keeping the database lock short.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -14,6 +15,7 @@ from . import db
 from .config import Config
 from .embeddings import Embedder
 from .models import ParsedSession
+from .projects import project_name, resolve_project
 from .sources import all_sources, build_summary
 from .store import Store
 
@@ -64,6 +66,11 @@ def ingest(
                 if parsed is None:
                     continue
                 report.scanned += 1
+                # Attribute the session to the repository that encloses its
+                # working directory, so the same repo is one scope no matter
+                # which subdirectory each agent was started in.
+                parsed.project_path = resolve_project(parsed.project_path)
+                parsed.project_name = project_name(parsed.project_path)
                 if parsed.project_path and project and not _under(parsed.project_path, project):
                     _mark(conn, parsed)
                     continue
@@ -97,5 +104,8 @@ def _mark(conn, parsed: ParsedSession) -> None:
 def _under(path: str | None, project: str) -> bool:
     if not path:
         return False
-    p = project.rstrip("/")
+    p = os.path.normpath(project).rstrip("/")
+    if not p:
+        return True  # scoping to "/" matches everything
+    path = os.path.normpath(path)
     return path == p or path.startswith(p + "/")

@@ -26,20 +26,21 @@ def _fts_query(query: str) -> str:
 
 
 def _project_clause(project: str | None) -> tuple[str, list[Any]]:
-    """Match a session by path prefix *or* project name.
+    """Match sessions belonging to ``project``.
 
-    Accepting names matters: an agent often runs in one repo while asking about
-    another ("what did I do in wfkit-archinstall?"), so the filter cannot rely on
-    the path alone.
+    ``project`` is a repository path or a project folder name. Matching is
+    *exact* (path equality, or folder name case-insensitively): sessions are
+    stored against their repository root on ingestion, so a parent directory
+    can no longer pull in every repository nested below it -- which is what
+    made a session started in ``$HOME`` list work from all projects.
     """
     if not project:
         return "", []
-    p = project.rstrip("/")
+    p = project.rstrip("/") or project
     name = p.rsplit("/", 1)[-1]
     return (
-        " AND (s.project_path = ? OR s.project_path LIKE ?"
-        " OR s.project_name = ? OR s.project_name LIKE ?)",
-        [p, p + "/%", name, "%" + name + "%"],
+        " AND (s.project_path = ? OR s.project_name = ? COLLATE NOCASE)",
+        [p, name],
     )
 
 
@@ -191,17 +192,18 @@ class Store:
                     title: str | None = None) -> str:
         """Store a manually written work note as a synthetic session."""
         import uuid
-        from pathlib import Path
 
         from .models import NOTE, Event, ParsedSession
+        from .projects import project_name, resolve_project
 
+        project = resolve_project(project)
         sid = uuid.uuid4().hex[:16]
         now = db.now_ms()
         p = ParsedSession(
             agent="note",
             session_id=sid,
             project_path=project,
-            project_name=Path(project).name if project else None,
+            project_name=project_name(project),
             title=title or (note.strip().splitlines()[0][:90] if note.strip() else "note"),
             summary=note,
             started_at=now,
@@ -214,6 +216,24 @@ class Store:
         return p.id
 
     # ----------------------------------------------------------------- queries
+
+    def _filtered_session_rows(self, ids: Sequence[str], project: str | None,
+                               agent: str | None, since: int | None,
+                               ) -> dict[str, sqlite3.Row]:
+        """Rows for ``ids`` that satisfy the same filters as the SQL queries."""
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        clause, params = _project_clause(project)
+        sql = f"SELECT * FROM sessions s WHERE s.id IN ({placeholders}){clause}"
+        args: list[Any] = [*ids, *params]
+        if agent:
+            sql += " AND s.agent = ?"
+            args.append(agent)
+        if since:
+            sql += " AND COALESCE(s.ended_at, s.started_at, 0) >= ?"
+            args.append(since)
+        return {r["id"]: r for r in self.conn.execute(sql, args).fetchall()}
 
     def _session_rows(self, ids: Sequence[str]) -> dict[str, sqlite3.Row]:
         if not ids:
@@ -303,27 +323,14 @@ class Store:
         sims = cosines(qv[0], vectors)
         order = [i for i in sims.argsort()[::-1] if float(sims[i]) >= min_similarity]
         order = order[: limit * 4]
-        p = (project or "").rstrip("/")
-        name = p.rsplit("/", 1)[-1] if p else ""
-        # apply filters via a lookup query
-        meta = self._session_rows([rows[i]["sid"] for i in order])
+        # Reuse the SQL filter so scoping is identical to lexical search.
+        meta = self._filtered_session_rows(
+            [rows[i]["sid"] for i in order], project, agent, since
+        )
         results: list[tuple[str, float]] = []
         for i in order:
             sid = rows[i]["sid"]
-            r = meta.get(sid)
-            if r is None:
-                continue
-            if p and not (
-                r["project_path"] == p
-                or (r["project_path"] or "").startswith(p + "/")
-                or r["project_name"] == name
-                or name in (r["project_name"] or "")
-            ):
-                continue
-            if agent and r["agent"] != agent:
-                continue
-            end = r["ended_at"] or r["started_at"] or 0
-            if since and end < since:
+            if sid not in meta:
                 continue
             results.append((sid, float(sims[i])))
             if len(results) >= limit:
