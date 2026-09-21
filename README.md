@@ -136,7 +136,7 @@ Exposed by `nimrod serve` (stdio). Registration is done by `nimrod install`.
 | Tool | Use |
 |------|-----|
 | `work_search(query, project?, agent?, since_days?, limit?)` | Hybrid (lexical + semantic) search over prompts, summaries, file paths, commands and outcomes. Returns sessions ranked by relevance, not date. |
-| `work_context(project?, limit?)` | A compact project brief — call it at the start of a task. |
+| `work_context(project?, limit?)` | A compact project brief. Already injected at session start when one exists; call it on demand, not preemptively. |
 | `work_recent(project?, agent?, limit?)` | Most recent sessions, newest first. |
 | `work_timeline(project?, limit?)` | Project sessions in chronological order. |
 | `work_session(id)` | Full detail of one session, including its normalized events. |

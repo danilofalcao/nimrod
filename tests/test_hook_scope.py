@@ -65,9 +65,15 @@ def test_brief_is_emitted_inside_a_repo_and_skipped_outside(tmp_path, capsys,
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     cli.cmd_hook(_args(tmp_path, scratch))
-    out = capsys.readouterr().out
-    assert "worklog for" not in out
-    assert "fix the widget" not in out
+    assert capsys.readouterr().out == ""
+
+
+def test_repo_without_recorded_work_emits_nothing(tmp_path, capsys, no_ingest):
+    repo = tmp_path / "fresh-repo"
+    (repo / ".git").mkdir(parents=True)
+
+    cli.cmd_hook(_args(tmp_path, repo))
+    assert capsys.readouterr().out == ""
 
 
 def test_brief_uses_the_repo_root_for_subdirectories(tmp_path, capsys, no_ingest):

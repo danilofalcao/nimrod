@@ -212,16 +212,6 @@ def cmd_install(args) -> int:
     install_all(Config(), dry=args.dry_run)
     return 0
 
-TOOLS_HINT = (
-    "Nimrod work memory is available in this session, shared across Claude, "
-    "Codex, OpenCode and Pi: work_search(query) finds how something was done "
-    "before, work_context(project) returns a project brief, work_recent and "
-    "work_timeline list history, work_session(id) shows one session. Project "
-    "arguments accept a path, a folder name, or '*' for all projects. Prefer "
-    "these over querying the database by hand."
-)
-
-
 def _tokens(text: str, limit: int = 12) -> list[str]:
     """Language-agnostic token extraction: words of length >= 3, de-duplicated."""
     out: list[str] = []
@@ -359,7 +349,12 @@ def cmd_hook(args) -> int:
             brief = store.context(scope, limit=args.limit)
     finally:
         conn.close()
-    text = TOOLS_HINT if not brief else TOOLS_HINT + "\n\n" + brief
+
+    # Nothing to hand off: stay out of the model's context entirely. Advertising
+    # the tools here would only invite calls the user never asked for.
+    if not brief:
+        return 0
+    text = brief
 
     if args.agent == "claude":
         payload = {

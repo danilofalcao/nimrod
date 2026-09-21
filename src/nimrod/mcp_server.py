@@ -59,13 +59,16 @@ def create_server():
     mcp = MCPServer(
         "nimrod",
         instructions=(
-            "Nimrod is the user's cross-session work memory shared by Claude "
-            "Code, Codex, OpenCode and Pi. At the start of a task call work_context "
-            "for the current project, and call work_search to find how something "
-            "was solved before -- across all agents. The 'project' argument "
-            "accepts a path, a project folder name, or '*' for every project; "
-            "use it when the user asks about a different repo than the one you "
-            "run in. Prefer these tools over querying the database or CLI "
+            "Nimrod is the user's cross-session work memory, shared by Claude "
+            "Code, Codex, OpenCode and Pi. It is opt-in: never call these "
+            "tools at session start, on a greeting, or just to gather "
+            "context. The current project's brief is already injected "
+            "automatically when one exists. Call them only when the user "
+            "asks about previous work, asks how something was done before, "
+            "or names another project. The 'project' argument accepts a "
+            "path, a project folder name, or '*' for every project; use it "
+            "when the user asks about a different repo than the one you run "
+            "in. Prefer these tools over querying the database or CLI "
             "yourself."
         ),
     )
@@ -74,9 +77,11 @@ def create_server():
     def work_context(project: str | None = None, limit: int = 6) -> str:
         """Compact brief of the most recent work in a project.
 
-        Use this at the start of a session to recover context: latest intents,
-        files touched and outcomes across all agents. ``project`` may be a path
-        or a folder name; omit it for the current project.
+        Returns the latest intents, files touched and outcomes across all
+        agents. The brief for the current project is already injected at
+        session start when one exists, so call this only when the user asks
+        for it or names another project. ``project`` may be a path or a
+        folder name; omit it for the current project.
         """
         conn, store = _open()
         try:
