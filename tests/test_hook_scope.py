@@ -1,4 +1,7 @@
-"""The session-start hook only emits a project brief inside a repository."""
+"""The session-start hook advertises Nimrod inside a repository.
+
+It never injects the brief -- capture stays automatic, recall stays on demand.
+"""
 
 from types import SimpleNamespace
 
@@ -49,8 +52,8 @@ def _args(tmp_path, project, event="session-start"):
     )
 
 
-def test_brief_is_emitted_inside_a_repo_and_skipped_outside(tmp_path, capsys,
-                                                            no_ingest):
+def test_awareness_is_emitted_inside_a_repo_and_skipped_outside(tmp_path, capsys,
+                                                                 no_ingest):
     config = Config(home=tmp_path / "home")
     config.ensure()
     repo = tmp_path / "repo"
@@ -59,8 +62,10 @@ def test_brief_is_emitted_inside_a_repo_and_skipped_outside(tmp_path, capsys,
 
     cli.cmd_hook(_args(tmp_path, repo))
     out = capsys.readouterr().out
-    assert "worklog for repo" in out
-    assert "fix the widget" in out
+    assert "Nimrod" in out and "work_search" in out
+    # Awareness only: the brief's content is never pushed into the context.
+    assert "worklog for repo" not in out
+    assert "fix the widget" not in out
 
     scratch = tmp_path / "scratch"
     scratch.mkdir()
@@ -68,27 +73,23 @@ def test_brief_is_emitted_inside_a_repo_and_skipped_outside(tmp_path, capsys,
     assert capsys.readouterr().out == ""
 
 
-def test_repo_without_recorded_work_emits_nothing(tmp_path, capsys, no_ingest):
+def test_repo_without_recorded_work_still_emits_awareness(tmp_path, capsys,
+                                                          no_ingest):
     repo = tmp_path / "fresh-repo"
     (repo / ".git").mkdir(parents=True)
 
     cli.cmd_hook(_args(tmp_path, repo))
-    assert capsys.readouterr().out == ""
+    assert "Nimrod" in capsys.readouterr().out
 
 
-def test_brief_uses_the_repo_root_for_subdirectories(tmp_path, capsys, no_ingest):
-    config = Config(home=tmp_path / "home")
-    config.ensure()
+def test_awareness_is_emitted_from_a_subdirectory(tmp_path, capsys, no_ingest):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     sub = repo / "src" / "deep"
     sub.mkdir(parents=True)
-    _add_session(config, repo, "fix the widget")
 
     cli.cmd_hook(_args(tmp_path, sub))
-    out = capsys.readouterr().out
-    assert "worklog for repo" in out
-    assert "fix the widget" in out
+    assert "Nimrod" in capsys.readouterr().out
 
 
 def test_session_end_is_silent(tmp_path, capsys, no_ingest):

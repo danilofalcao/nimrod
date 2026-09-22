@@ -212,6 +212,26 @@ def cmd_install(args) -> int:
     install_all(Config(), dry=args.dry_run)
     return 0
 
+
+# Awareness, not content: the hook tells the model that the worklog exists and
+# when to consult it, but never injects the brief itself. That keeps a greeting
+# from triggering a recall while still making a cold session reach for Nimrod.
+AWARENESS = (
+    "Nimrod is the user's cross-session work memory, available in this "
+    "session and shared by Claude Code, Codex, OpenCode and Pi. The "
+    "worklog itself is not injected automatically, so consult it yourself "
+    "when you lack the context to answer -- when the user refers to "
+    "earlier work, asks how "
+    "something was done before, or names another project. Prefer these "
+    "tools over querying the database or CLI by hand: work_search(query) "
+    "finds how something was done, work_context(project) returns a project "
+    "brief, work_recent and work_timeline list history, work_session(id) "
+    "shows one session. The project argument accepts a path, a folder "
+    "name, or '*' for all projects. Do not call it on a greeting or "
+    "preemptively."
+)
+
+
 def _tokens(text: str, limit: int = 12) -> list[str]:
     """Language-agnostic token extraction: words of length >= 3, de-duplicated."""
     out: list[str] = []
@@ -342,19 +362,13 @@ def cmd_hook(args) -> int:
     if args.event == "session-end":
         return 0
 
-    conn, store = _open(cfg, semantic=False)
-    try:
-        brief = ""
-        if find_project_root(scope):
-            brief = store.context(scope, limit=args.limit)
-    finally:
-        conn.close()
-
-    # Nothing to hand off: stay out of the model's context entirely. Advertising
-    # the tools here would only invite calls the user never asked for.
-    if not brief:
+    # Awareness only: never inject the brief. The model decides whether to
+    # consult Nimrod, but it has to know the tools exist -- a session that
+    # starts cold is exactly when past work helps most. Outside a repository
+    # there is no project to scope a recall to, so stay out of the context.
+    if not find_project_root(scope):
         return 0
-    text = brief
+    text = AWARENESS
 
     if args.agent == "claude":
         payload = {
@@ -451,7 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("event", choices=["session-start", "session-end", "prompt-submit"])
     p.add_argument("--agent", default="claude", choices=["claude", "codex", "opencode", "pi"])
     p.add_argument("--project")
-    p.add_argument("--limit", type=int, default=6)
+    p.add_argument("--limit", type=int, default=1)
     p.add_argument("--semantic", action="store_true",
                    help="also compute embeddings during ingest (slower)")
     p.add_argument("--home")

@@ -159,3 +159,37 @@ def test_semantic_search_respects_exact_scope(tmp_path):
         assert {r["session_id"] for r in everything} == {"parent", "child"}
     finally:
         conn.close()
+
+
+def test_recent_window_bounds_the_time_range(store):
+    for sid, start, end in (("old", 1000, 1000), ("mid", 5000, 6000), ("new", 9000, 9000)):
+        p = _session(sid, "/home/me/alpha", f"work {sid}", "/home/me/alpha/a.py")
+        p.started_at, p.ended_at = start, end
+        store.write_session(p)
+
+    # Newest first, and the window composes with the project scope.
+    assert [s["session_id"] for s in store.recent(since=4000)] == ["new", "mid"]
+    assert [s["session_id"] for s in store.recent(until=6500)] == ["mid", "old"]
+    assert [s["session_id"] for s in store.recent(since=4000, until=6500)] == ["mid"]
+    assert [s["session_id"] for s in store.timeline(project="/home/me/alpha")] == \
+        ["old", "mid", "new"]
+    assert [s["session_id"] for s in store.timeline(since=4000)] == ["mid", "new"]
+
+
+def test_brief_rows_omit_detail_and_skip_top_files(store):
+    store.write_session(_session("s1", "/home/me/alpha", "add login",
+                                 "/home/me/alpha/auth.py"))
+
+    full = store.recent("/home/me/alpha")[0]
+    assert full["summary"]
+    assert full["top_files"] == ["/home/me/alpha/auth.py"]
+
+    # The listing projection an enumeration can afford: no summary, no raw
+    # payload, no per-session top_files query.
+    brief = store.recent("/home/me/alpha", full=False)[0]
+    assert brief["id"] == "claude:s1"
+    assert brief["title"] == "add login"
+    assert brief["project_name"] == "alpha"
+    assert "summary" not in brief
+    assert "raw" not in brief
+    assert "top_files" not in brief

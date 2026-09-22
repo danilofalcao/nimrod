@@ -1,8 +1,9 @@
 // Nimrod context plugin for OpenCode (installed by `nimrod install`).
 //
-// Injects the project's recent worklog into the system prompt once per session,
-// before the first model call. Capture of the session itself happens through
-// the same hook script the other agents use.
+// Injects the Nimrod awareness notice into the system prompt once per session,
+// before the first model call (the brief itself is never injected -- the model
+// fetches it through the MCP tools when it needs context). Capture of the
+// session itself happens through the same hook script the other agents use.
 import { execFile } from "node:child_process";
 
 const NIMROD_BIN = process.env.NIMROD_BIN || "__NIMROD_BIN__";
@@ -28,10 +29,7 @@ export const NimrodContextPlugin = async () => ({
     );
     const trimmed = text.trim();
     if (trimmed && Array.isArray(output?.system)) {
-      output.system.push(
-        "Nimrod worklog (shared memory of previous Claude/Codex/OpenCode " +
-          "sessions in this project):\n" + trimmed,
-      );
+      output.system.push(trimmed);
     }
   },
 });

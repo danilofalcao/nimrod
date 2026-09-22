@@ -378,20 +378,38 @@ class Store:
         return out
 
     def recent(self, project: str | None = None, agent: str | None = None,
-               limit: int = 10) -> list[dict[str, Any]]:
+               limit: int = 10, since: int | None = None, until: int | None = None,
+               full: bool = True) -> list[dict[str, Any]]:
+        """Most recent sessions, newest first.
+
+        ``since``/``until`` bound the session's end (falling back to its start)
+        in epoch milliseconds, so any time window composes with ``project`` and
+        ``agent``. ``full=False`` returns the brief listing projection: no
+        summary, no raw payload and no per-session ``top_files`` query.
+        """
         clause, params = _project_clause(project)
         where = clause.replace(" AND ", " WHERE ", 1) if clause else ""
         args: list[Any] = list(params)
         if agent:
             where += (" AND " if where else " WHERE ") + "s.agent = ?"
             args.append(agent)
+        stamp = "COALESCE(s.ended_at, s.started_at, 0)"
+        if since is not None:
+            where += (" AND " if where else " WHERE ") + f"{stamp} >= ?"
+            args.append(since)
+        if until is not None:
+            where += (" AND " if where else " WHERE ") + f"{stamp} <= ?"
+            args.append(until)
         sql = f"SELECT s.* FROM sessions s{where} ORDER BY COALESCE(s.ended_at, s.started_at) DESC LIMIT ?"
         args.append(limit)
         rows = self.conn.execute(sql, args).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        return [self._row_to_dict(r, full=full) for r in rows]
 
-    def timeline(self, project: str | None = None, limit: int = 25) -> list[dict[str, Any]]:
-        return list(reversed(self.recent(project=project, limit=limit)))
+    def timeline(self, project: str | None = None, limit: int = 25,
+                 since: int | None = None, until: int | None = None,
+                 full: bool = True) -> list[dict[str, Any]]:
+        return list(reversed(self.recent(project=project, limit=limit, since=since,
+                                         until=until, full=full)))
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
@@ -489,8 +507,19 @@ class Store:
         ).fetchall()
         return [r["target"] for r in rows]
 
-    def _row_to_dict(self, r: sqlite3.Row, matched: bool = False) -> dict[str, Any]:
+    #: Columns that only matter for one session's full detail, never for a
+    #: listing. Dropping them -- and skipping the per-session ``top_files``
+    #: query -- keeps an enumeration no heavier than the equivalent SQL row.
+    _BRIEF_DROP = ("raw", "summary", "source_path", "source_mtime",
+                   "source_size", "content_hash", "ingested_at")
+
+    def _row_to_dict(self, r: sqlite3.Row, matched: bool = False,
+                     full: bool = True) -> dict[str, Any]:
         d = {k: r[k] for k in r.keys()}
-        d["top_files"] = self.top_files(r["id"]) if r["file_count"] else []
         d["matched"] = matched
+        if full:
+            d["top_files"] = self.top_files(r["id"]) if r["file_count"] else []
+        else:
+            for key in self._BRIEF_DROP:
+                d.pop(key, None)
         return d

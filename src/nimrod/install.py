@@ -3,8 +3,8 @@
 Per agent, two things get installed:
 
 * a **hook** (or, for Pi, a TypeScript extension) that refreshes the worklog
-  and injects the project brief at session start (capture is automatic, the
-  model does nothing), and
+  and advertises it at session start -- it tells the model the tools exist but
+  injects no content (capture is automatic, the model does nothing), and
 * the **MCP server** so any agent can query the shared worklog on demand.
 
 Everything writes with a ``.nimrod.bak`` backup and is idempotent. Use

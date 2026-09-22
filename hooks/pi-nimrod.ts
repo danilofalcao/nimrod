@@ -3,8 +3,9 @@
 // Pi has no shell hooks, so this extension plays the role the hook script plays
 // for Claude/Codex/OpenCode:
 //
-//   * on session start it refreshes the worklog and injects the project brief
-//     into the first model call (as a hidden persisted custom message);
+//   * on session start it refreshes the worklog and injects the Nimrod
+//     awareness notice (not the brief) into the first model call (as a hidden
+//     persisted custom message), so the model knows it can consult the tools;
 //   * before every prompt it asks Nimrod for a gated auto-recall when the prompt
 //     mentions another known project;
 //   * on session shutdown it refreshes the worklog in the background.
@@ -69,7 +70,9 @@ export default function NimrodPiExtension(pi) {
     // Fallback in case session_start has not completed yet (or did not fire).
     if (!startFetched) await fetchStartContext(project);
 
-    if (!injected && startContext) {
+    const prompt = (event && event.prompt) || "";
+
+    if (!injected && startContext && prompt.trim().length >= 12) {
       injected = true;
       parts.push(startContext);
     }

@@ -9,6 +9,7 @@ Run with ``nimrod serve`` or the ``nimrod-mcp`` entry point (stdio).
 
 from __future__ import annotations
 
+import datetime
 import os
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,32 @@ def _scope(project: str | None, cwd_default: bool = True) -> str | None:
     return resolve_project(project)
 
 
+def _to_ms(value: Any, *, end_of_day: bool = False) -> int | None:
+    """Coerce a window bound to epoch milliseconds.
+
+    Accepts epoch seconds/milliseconds, or an ISO date/datetime. A naive value
+    (``2026-09-21``) is read on the caller's local clock, which is what a user
+    means by "yesterday"; ``end_of_day`` extends a date-only ``until`` so the
+    named day is included rather than excluded at its first instant.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value if value >= 1e11 else value * 1000)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        if end_of_day and len(text) == 10:
+            dt = dt.replace(hour=23, minute=59, second=59, microsecond=999000)
+        dt = dt.astimezone()
+    return int(dt.timestamp() * 1000)
+
+
 def create_server():
     from mcp.server.mcpserver import MCPServer
 
@@ -60,16 +87,16 @@ def create_server():
         "nimrod",
         instructions=(
             "Nimrod is the user's cross-session work memory, shared by Claude "
-            "Code, Codex, OpenCode and Pi. It is opt-in: never call these "
-            "tools at session start, on a greeting, or just to gather "
-            "context. The current project's brief is already injected "
-            "automatically when one exists. Call them only when the user "
-            "asks about previous work, asks how something was done before, "
-            "or names another project. The 'project' argument accepts a "
-            "path, a project folder name, or '*' for every project; use it "
-            "when the user asks about a different repo than the one you run "
-            "in. Prefer these tools over querying the database or CLI "
-            "yourself."
+            "Code, Codex, OpenCode and Pi. The worklog is not injected "
+            "automatically: consult these tools yourself whenever you lack "
+            "the context to answer -- when the user refers to earlier work, "
+            "asks how something was done before, or names another project. "
+            "Do not call them on a greeting or preemptively; reach for them "
+            "when they would actually supply an answer you do not have. The "
+            "'project' argument accepts a path, a project folder name, or "
+            "'*' for every project; use it when the user asks about a "
+            "different repo than the one you run in. Prefer these tools over "
+            "querying the database or CLI yourself."
         ),
     )
 
@@ -78,10 +105,10 @@ def create_server():
         """Compact brief of the most recent work in a project.
 
         Returns the latest intents, files touched and outcomes across all
-        agents. The brief for the current project is already injected at
-        session start when one exists, so call this only when the user asks
-        for it or names another project. ``project`` may be a path or a
-        folder name; omit it for the current project.
+        agents. Call it before guessing about the current project's recent
+        history, or when the user asks for it or names another project.
+        ``project`` may be a path or a folder name; omit it for the current
+        project.
         """
         conn, store = _open()
         try:
@@ -92,15 +119,25 @@ def create_server():
 
     @mcp.tool()
     def work_recent(project: str | None = None, agent: str | None = None,
-                    limit: int = 10) -> dict:
+                    limit: int = 10, since: str | None = None,
+                    until: str | None = None, detail: bool = False) -> dict:
         """Most recent sessions, newest first.
 
         ``agent`` filters claude/codex/opencode/pi. ``project`` accepts a path or a
         folder name, or '*' for all projects (default: current project).
+        ``since``/``until`` bound the window and accept an ISO date/datetime
+        (read on the local clock) or epoch seconds/ms; ``until`` includes the
+        whole named day. These compose, so "everything yesterday across all
+        projects" is ``project='*', since='2026-09-21', until='2026-09-21'``.
+        Rows are brief by default; ``detail=true`` adds summaries.
         """
         conn, store = _open()
         try:
-            results = store.recent(_scope(project), agent=agent, limit=limit)
+            results = store.recent(
+                _scope(project), agent=agent, limit=limit,
+                since=_to_ms(since), until=_to_ms(until, end_of_day=True),
+                full=detail,
+            )
             return {"count": len(results), "results": results}
         finally:
             conn.close()
@@ -111,9 +148,10 @@ def create_server():
         """Hybrid (lexical + semantic) search over past work.
 
         Searches prompts, summaries, file paths, commands and assistant
-        outcomes. Returns sessions ranked by relevance, not by date. Searches
-        every project by default; pass ``project`` (path or folder name) to
-        narrow it.
+        outcomes. Returns sessions ranked by relevance, not by date. Call it
+        when you lack the context to answer and past work may hold it.
+        Searches every project by default; pass ``project`` (path or folder
+        name) to narrow it.
         """
         import time
 
@@ -127,15 +165,23 @@ def create_server():
             conn.close()
 
     @mcp.tool()
-    def work_timeline(project: str | None = None, limit: int = 25) -> dict:
+    def work_timeline(project: str | None = None, limit: int = 25,
+                      since: str | None = None, until: str | None = None,
+                      detail: bool = False) -> dict:
         """Chronological list of sessions in a project (oldest to newest).
 
         ``project`` accepts a path or a folder name; omit it for the current
-        project, or pass '*' for all.
+        project, or pass '*' for all. ``since``/``until`` bound the window (ISO
+        date/datetime on the local clock, or epoch seconds/ms). Rows are brief
+        by default; ``detail=true`` adds summaries.
         """
         conn, store = _open()
         try:
-            results = store.timeline(_scope(project), limit=limit)
+            results = store.timeline(
+                _scope(project), limit=limit,
+                since=_to_ms(since), until=_to_ms(until, end_of_day=True),
+                full=detail,
+            )
             return {"count": len(results), "results": results}
         finally:
             conn.close()
